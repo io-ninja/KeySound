@@ -17,7 +17,7 @@
 <body>
 <a class="skip" href="#controls">Lewati ke kontrol suara</a>
 <div class="shell">
-<header class="masthead"><h1>KeySound.</h1><p>Suara untuk setiap ketukan.<br>Atur di sini. Dengarkan di Mac.</p></header>
+<header class="masthead"><h1>KeySound.</h1><p>Suara untuk setiap ketukan.<br>Atur di sini. Dengarkan di komputer Anda.</p></header>
 <div class="statusbar" aria-label="Status service"><span id="service-status">Menghubungkan ke service lokal…</span><span id="listener-status">Memeriksa keyboard…</span><span id="audio-status">Memeriksa audio…</span></div>
 <div class="notice error" id="connection-error" role="alert" hidden>Service tidak terhubung. Jalankan keysound.py, lalu muat ulang halaman.</div>
 <div class="notice" id="permission-notice" role="status" hidden></div>
@@ -40,10 +40,10 @@
 </div>
 <section class="upload" aria-labelledby="upload-title"><div class="upload-intro"><h2 id="upload-title">Bawa suara sendiri.</h2><p>Unggah audio ke pack Custom. Lalu pilih pack tersebut untuk memakainya.</p></div><div class="dropzone" id="dropzone"><label for="audio-file">Tarik berkas ke sini atau pilih audio</label><p class="small" id="upload-help">WAV / MP3 · maksimal 10 MiB, 10 detik · mono/stereo.<br>Maksimal 16 audio per pack. Nama berkas: huruf Latin, angka, spasi, titik, tanda hubung, atau garis bawah.</p><div class="uploadrow"><div><input id="audio-file" type="file" accept=".wav,.mp3,audio/wav,audio/mpeg" aria-describedby="upload-help"><p class="small" id="file-status">Belum ada berkas dipilih.</p></div><button id="upload" type="button">Unggah audio</button></div></div></section>
 </fieldset>
-<details class="help" id="permission-help"><summary>Izin macOS & privasi</summary><ol><li>Buka <strong>System Settings → Privacy & Security → Input Monitoring</strong>. Izinkan aplikasi yang menjalankan service, misalnya Terminal atau Python. Periksa juga <strong>Accessibility</strong> jika listener tetap belum siap.</li><li>Setelah izin diubah, macOS mungkin meminta aplikasi peluncur ditutup dan dibuka kembali. Status listener diperiksa otomatis; bila tetap gagal, jalankan ulang service.</li><li>Listener hanya memakai kode tombol untuk memilih audio, lalu membuangnya. Tidak ada pencatatan isi ketikan, riwayat tombol, atau pengiriman tombol ke dashboard.</li><li>Secure Input pada kolom kata sandi atau aplikasi tertentu dapat menghentikan suara. KeySound tidak mencoba melewati perlindungan itu.</li><li>Label mengikuti posisi keyboard ANSI. Tombol media/Fn tertentu bergantung pada perangkat dan pengaturan macOS. Menutup tab tidak menghentikan service; tombol Matikan suara membisukan audio.</li></ol></details>
+<details class="help" id="permission-help"><summary>Akses keyboard & privasi</summary><ol><li data-platform="darwin">Buka <strong>System Settings → Privacy & Security → Input Monitoring</strong>. Izinkan aplikasi peluncur atau Python. Periksa juga <strong>Accessibility</strong> bila perlu. Setelah mengubah izin, restart service; menunggu saja belum tentu cukup.</li><li data-platform="win32" hidden>Jalankan KeySound setelah login Windows pada sesi desktop Anda. Tidak perlu izin Accessibility macOS. Untuk autostart gunakan windows.ps1 melalui Task Scheduler, bukan Windows Service. Layar login/UAC dan aplikasi dengan pembatasan input dapat tidak terjangkau.</li><li>Listener hanya memakai kode tombol untuk memilih audio. Windows menyimpan set tombol yang sedang ditahan untuk menolak pengulangan, lalu menghapusnya saat dilepas. Tidak ada pencatatan isi ketikan, riwayat tombol, atau pengiriman tombol ke dashboard.</li><li data-platform="darwin">Secure Input pada kolom kata sandi atau aplikasi tertentu dapat menghentikan suara. KeySound tidak mencoba melewati perlindungan itu.</li><li>Label mengikuti posisi keyboard ANSI. Tombol media/Fn tertentu bergantung pada perangkat dan sistem operasi. Menutup tab tidak menghentikan service; tombol Matikan suara hanya membisukan audio.</li></ol></details>
 </main>
 <div class="feedback" id="feedback" role="status" aria-live="polite" hidden></div>
-<footer class="footer"><p>KeySound · lokal di Mac Anda · tanpa akun</p><p>Gunshot bawaan: efek sintetis, bukan rekaman senjata.</p></footer>
+<footer class="footer"><p>KeySound · lokal di komputer Anda · tanpa akun</p><p>Gunshot bawaan: efek sintetis, bukan rekaman senjata.</p></footer>
 </div>
 <script>
 'use strict';
@@ -64,6 +64,7 @@ function fallback() { const p = activePack(); return state.config.default_sound[
 function effectiveSound(key) { const p = activePack(); return state.config.mode === 'single' ? fallback() : (state.config.overrides[p.id]?.[key] || p.mapping[key] || fallback()); }
 function statusView() {
   const s = state.status, enabled = state.config.enabled;
+  for (const node of document.querySelectorAll('[data-platform]')) node.hidden = node.dataset.platform !== (state.platform || 'darwin');
   $('service-status').textContent = !enabled ? 'Suara dimatikan' : (s.audio && s.listener ? 'Suara aktif' : 'Aktif diminta, menunggu perangkat / izin');
   $('listener-status').textContent = s.listener ? 'Keyboard: listener siap' : 'Keyboard: belum siap';
   $('audio-status').textContent = s.audio && !s.audio_error ? 'Audio: siap' : 'Audio: perlu diperiksa';
@@ -104,6 +105,7 @@ function render() {
     const rows = [[53,122,120,99,118,96,97,98,100,101,109,103,111],[50,18,19,20,21,23,22,26,28,25,29,27,24,51],[48,12,13,14,15,17,16,32,34,31,35,33,30,42],[57,0,1,2,3,5,4,38,40,37,41,39,36],[56,6,7,8,9,11,45,46,43,47,44,60],[59,58,55,49,54,61,123,126,125,124]];
     const labels = Object.fromEntries(state.keys.map(k => [k.code, k.label]));
     const short = {'51':'⌫','57':'Caps','56':'Shift','60':'Shift','59':'Ctrl','58':'Opt','61':'Opt','55':'Cmd','54':'Cmd','123':'←','124':'→','125':'↓','126':'↑'};
+    if (state.platform === 'win32') Object.assign(short, {'58':'Alt','61':'Alt','55':'Win','54':'Win'});
     for (const row of rows) {
       const line = document.createElement('div'); line.className = 'keyrow';
       for (const code of row) { const button = document.createElement('button'); button.type = 'button'; button.className = 'key' + (code === 49 ? ' space' : ([51,48,57,36,56,60].includes(code) ? ' wide' : '')); button.dataset.key = String(code); button.textContent = short[code] || labels[code]; button.setAttribute('aria-label', 'Atur tombol ' + labels[code]); button.addEventListener('click', () => {chosenKey = String(code); mappingView();}); line.append(button); }
@@ -125,7 +127,7 @@ $('volume').addEventListener('input', () => { $('volume-value').value = $('volum
 $('volume').addEventListener('change', () => mutate('/api/config', {volume:Number($('volume').value)/100}, 'Volume tersimpan.'));
 $('mode').addEventListener('change', () => mutate('/api/config', {mode:$('mode').value}, 'Mode tersimpan.'));
 $('default-sound').addEventListener('change', () => mutate('/api/default', {sound:$('default-sound').value}, 'Suara fallback tersimpan.'));
-$('test-default').addEventListener('click', () => mutate('/api/preview', {sound:fallback()}, 'Preview diputar melalui output audio Mac.'));
+$('test-default').addEventListener('click', () => mutate('/api/preview', {sound:fallback()}, 'Preview dikirim ke output audio komputer.'));
 $('key-select').addEventListener('change', () => {chosenKey = $('key-select').value; mappingView();});
 $('save-mapping').addEventListener('click', () => mutate('/api/mapping', {key:chosenKey, sound:$('key-sound').value}, 'Mapping tombol tersimpan.'));
 $('reset-mapping').addEventListener('click', () => mutate('/api/mapping', {key:chosenKey, sound:''}, 'Override dihapus. Tombol mengikuti mapping pack / fallback.'));

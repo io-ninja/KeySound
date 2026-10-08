@@ -1,2 +1,7 @@
-pyobjc-framework-Quartz==12.2.2
-pyobjc-framework-AVFoundation==12.2.2
+# macOS keeps its native backend; Windows never installs PyObjC.
+pyobjc-framework-Quartz==12.2.2; sys_platform == "darwin"
+pyobjc-framework-AVFoundation==12.2.2; sys_platform == "darwin"
+pynput==1.8.2; sys_platform == "win32"
+sounddevice==0.5.6; sys_platform == "win32"
+soundfile==0.14.0; sys_platform == "win32"
+numpy==2.5.3; sys_platform == "win32"

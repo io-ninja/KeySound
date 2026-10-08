@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""KeySound: local keyboard sounds for macOS."""
+"""KeySound: local keyboard sounds for macOS and Windows."""
 import argparse
 import copy
 import ctypes
@@ -18,6 +18,7 @@ import uuid
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
+from contextlib import nullcontext
 
 BASE = Path(__file__).resolve().parent
 KEYS = dict(zip(
@@ -33,7 +34,7 @@ DEFAULT_CONFIG = {"enabled": False, "pack": "gunshot", "mode": "single",
 def load_config(path):
     if not path.exists():
         return json.loads(json.dumps(DEFAULT_CONFIG))
-    config = json.loads(path.read_text())
+    config = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(config, dict):
         raise ValueError("Konfigurasi harus berupa objek JSON.")
     if type(config.get("enabled", False)) is not bool:
@@ -102,7 +103,7 @@ def atomic_json(path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(prefix=".keysound-", dir=path.parent)
     try:
-        with os.fdopen(fd, "w") as stream:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
             json.dump(value, stream, ensure_ascii=False, indent=2, allow_nan=False)
             stream.write("\n")
             stream.flush()
@@ -118,7 +119,7 @@ def read_pack(directory):
         raise ValueError("Symlink pack tidak diizinkan.")
     if manifest.stat().st_size > 32768:
         raise ValueError("pack.json terlalu besar.")
-    data = json.loads(manifest.read_text())
+    data = json.loads(manifest.read_text(encoding="utf-8"))
     if not isinstance(data, dict) or not isinstance(data.get("name"), str):
         raise ValueError("Pack harus memiliki name.")
     files = sorted(p.name for p in directory.iterdir() if p.suffix.lower() in (".wav", ".mp3") and p.is_file())
@@ -191,8 +192,12 @@ class Audio:
             raise
 
     def set_volume(self, volume):
+        self.volume = volume
         # ponytail: fixed headroom avoids clipping at the voice cap; no compressor needed.
         self.engine.mainMixerNode().setOutputVolume_(volume / self.max_voices)
+
+    def is_running(self):
+        return bool(self.engine.isRunning())
 
     def play(self, name):
         if not self.engine.isRunning():
@@ -241,7 +246,13 @@ class Audio:
             raise RuntimeError("Perangkat audio tidak dapat dimulai: " + str(error))
 
 
+if sys.platform == "win32":
+    from windows_backend import Audio, decode_audio
+
+
 def permissions():
+    if sys.platform == "win32":
+        return {"required": False, "accessibility": None, "input_monitoring": None}
     import Quartz as Q
     ax = ctypes.CDLL("/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices")
     ax.AXIsProcessTrusted.restype = ctypes.c_bool
@@ -290,9 +301,10 @@ class App:
         with self.lock:
             return {"config": copy.deepcopy(self.config),
                     "packs": [{k: v for k, v in p.items() if k != "directory"} for p in self.packs.values()],
-                    "keys": [{"code": str(k), "label": v} for k, v in KEYS.items()],
+                    "platform": sys.platform,
+                    "keys": [{"code": str(k), "label": ({55:"Win", 54:"Win kanan", 58:"Alt", 61:"Alt kanan", 71:"Num Lock"}.get(k, v) if sys.platform == "win32" else v)} for k, v in KEYS.items()],
                     "status": {"listener": self.listener_ready, "listener_error": self.listener_error,
-                               "audio": bool(self.audio and self.audio.engine.isRunning()),
+                               "audio": bool(self.audio and self.audio.is_running()),
                                "audio_error": self.audio_error, "permissions": permissions()}}
 
     def update(self, patch, force=False):
@@ -338,13 +350,16 @@ class App:
         return True
 
     def consume(self):
-        import objc
+        pool = nullcontext
+        if sys.platform == "darwin":
+            import objc
+            pool = objc.autorelease_pool
         while not self.quit.is_set():
             try:
                 sound, generation, created = self.events.get(timeout=0.2)
             except queue.Empty:
                 continue
-            with objc.autorelease_pool(), self.lock:
+            with pool(), self.lock:
                 if generation != self.generation or not self.config["enabled"] or time.monotonic() - created > 0.1:
                     continue
                 try:
@@ -359,7 +374,13 @@ class App:
                 raise ValueError(self.audio_error or "Audio belum siap.")
             if sound not in self.packs[self.config["pack"]]["files"]:
                 raise ValueError("Pilih audio dari pack aktif.")
-            return {"played": self.audio.play(sound)}
+            try:
+                played = self.audio.play(sound)
+                self.audio_error = ""
+                return {"played": played}
+            except Exception as error:
+                self.audio_error = str(error)
+                raise
 
     def upload(self, name, data):
         validate_upload(name, data)
@@ -393,6 +414,9 @@ class App:
         return self.state()
 
     def listen(self):
+        if sys.platform == "win32":
+            from windows_backend import listen
+            return listen(self)
         import Quartz as Q
         import objc
         tap = None
@@ -556,7 +580,7 @@ def make_server(app, port):
             except (OSError, RuntimeError) as error:
                 self.respond(503, {"error": str(error)})
             except Exception:
-                self.respond(500, {"error": "Operasi gagal. Periksa audio dan izin macOS, lalu coba lagi."})
+                self.respond(500, {"error": "Operasi gagal. Periksa audio dan akses keyboard, lalu coba lagi."})
     return HTTPServer(("127.0.0.1", port), Handler)
 
 
@@ -611,24 +635,40 @@ def selftest():
     print("PASS: upload names, traversal, format, empty and size limits")
 
 
+def default_config_dir():
+    if sys.platform == "win32":
+        return Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData/Local")) / "KeySound"
+    return Path.home() / ".config/keysound"
+
+
 def main():
-    parser = argparse.ArgumentParser(description="Keyboard sounds + localhost dashboard for macOS")
+    parser = argparse.ArgumentParser(description="Keyboard sounds + localhost dashboard for macOS and Windows")
     parser.add_argument("--selftest", action="store_true", help="Run stdlib-only checks without listening or playing audio")
     parser.add_argument("--port", type=int, default=8765)
-    parser.add_argument("--config-dir", type=Path, default=Path.home() / ".config/keysound")
+    parser.add_argument("--config-dir", type=Path, default=default_config_dir())
+    parser.add_argument("--log-file", type=Path, help="Startup/error log for background launch; never logs keystrokes")
     args = parser.parse_args()
     if args.selftest:
         selftest()
         return
-    if sys.platform != "darwin":
-        parser.error("Service ini khusus macOS. --selftest tetap bisa dijalankan tanpa macOS.")
+    if sys.platform not in ("darwin", "win32"):
+        parser.error("Service mendukung macOS dan Windows. --selftest tetap tersedia di platform lain.")
+    if args.log_file:
+        args.log_file.parent.mkdir(parents=True, exist_ok=True)
+        sys.stdout = sys.stderr = args.log_file.open("a", encoding="utf-8", buffering=1)
     if not 1024 <= args.port <= 65535:
         parser.error("Port harus 1024–65535.")
     try:
-        import Quartz
-        import AVFoundation
+        if sys.platform == "darwin":
+            import Quartz
+            import AVFoundation
+        else:
+            import pynput
+            import sounddevice
+            import soundfile
+            import numpy
     except ImportError:
-        parser.error("Dependency belum tersedia. Jalankan: uv pip install --python .venv/bin/python -r requirements.txt")
+        parser.error("Dependency belum tersedia. Jalankan python -m pip install -r requirements.txt dalam .venv proyek.")
     app = None
     server = None
     try:
@@ -640,7 +680,10 @@ def main():
         signal.signal(signal.SIGTERM, stop)
         print(f"KeySound dashboard: http://127.0.0.1:{args.port}", flush=True)
         print("Suara " + ("aktif." if app.config["enabled"] else "dimatikan. Aktifkan dari dashboard."), flush=True)
-        print("Jika listener belum siap: System Settings > Privacy & Security > Input Monitoring / Accessibility.", flush=True)
+        if sys.platform == "darwin":
+            print("Jika listener belum siap: System Settings > Privacy & Security > Input Monitoring / Accessibility.", flush=True)
+        else:
+            print("Jalankan pada sesi desktop pengguna. Windows Service/layar UAC tidak didukung.", flush=True)
         if app.audio_error:
             print("Audio: " + app.audio_error, file=sys.stderr, flush=True)
         server.serve_forever(poll_interval=0.2)
