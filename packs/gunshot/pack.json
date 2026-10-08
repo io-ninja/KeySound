@@ -1,0 +1,6 @@
+{
+  "name": "Gunshot",
+  "default": "gunshot.wav",
+  "mapping": {},
+  "source": "Efek tembakan sintetis buatan proyek KeySound, bukan rekaman senjata. Dibuat dari derau dan gelombang sinus; tidak memakai sampel pihak ketiga. CC0-1.0."
+}
